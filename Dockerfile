@@ -1,43 +1,31 @@
-# Dockerfile for Node.js application
-
-# Use a multi-stage build to optimize image size
-FROM node:18-alpine AS builder
-
-# Set working directory
-WORKDIR /app
-
-# Copy package.json and package-lock.json (or yarn.lock/pnpm-lock.yaml)
-COPY package.json ./
-
-# Install dependencies based on the package manager used
-RUN if [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
-    elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; \
-    else npm ci --only=production; fi
-
-# Copy source code
-COPY index.js ./
-
-# Build the application (if needed - adjust command based on your project)
-#RUN npm run build
-
-# --- Production Stage ---
+# Node.js Application
 FROM node:18-alpine
 
-# Set working directory
+# Create app directory
 WORKDIR /app
 
-# Copy built artifacts from the builder stage
-COPY --from=builder /app ./
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S -D -H -u 1001 -h /app -s /sbin/nologin -G nodejs -g nodejs nodejs
 
-# Set environment variables
-ENV NODE_ENV production
-ENV PORT 3000
+# Copy package files
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 
-# Expose the port the app runs on
-EXPOSE $PORT
+# Install dependencies
+RUN npm ci --only=production && \
+    npm cache clean --force
 
-# Define health check (adjust based on your application's health endpoint)
-HEALTHCHECK --interval=5m --timeout=3s --retries=3 CMD curl -f http://localhost:$PORT || exit 1
+# Copy source code
+COPY --chown=nodejs:nodejs . .
 
-# Define command to start the application
-CMD ["node", "index.js"]
+# Set proper permissions
+RUN chown -R nodejs:nodejs /app
+
+USER nodejs
+
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))" || exit 1
+
+CMD ["node index.js"]
