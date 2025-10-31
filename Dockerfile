@@ -1,31 +1,43 @@
-# Node.js Application
-FROM node:18-alpine
+# Dockerfile for Node.js application
 
-# Create app directory
+# Use a multi-stage build to optimize image size
+
+# --- Builder Stage ---
+FROM node:18-alpine AS builder
+
+# Set working directory
 WORKDIR /app
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && adduser -S -D -H -u 1001 -h /app -s /sbin/nologin -G nodejs -g nodejs nodejs
+# Copy package.json and package-lock.json/yarn.lock/pnpm-lock.yaml
+COPY package.json ./
 
-# Copy package files
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-
-# Install dependencies
-RUN npm ci --only=production && \
-    npm cache clean --force
+# Install dependencies based on the package manager used
+RUN if [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
+    elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && pnpm install --frozen-lockfile; \
+    else npm ci; fi
 
 # Copy source code
-COPY --chown=nodejs:nodejs . .
+COPY index.js ./
 
-# Set proper permissions
-RUN chown -R nodejs:nodejs /app
+# --- Production Stage ---
+FROM node:18-alpine
 
-USER nodejs
+# Set working directory
+WORKDIR /app
 
+# Copy built artifacts from builder stage
+COPY --from=builder /app ./
+
+# Set environment variables
+ENV NODE_ENV production
+ENV PORT 3000
+
+# Expose the port the app runs on
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))" || exit 1
+# Define health check
+HEALTHCHECK --interval=5m --timeout=3s \
+  CMD curl -f http://localhost:$PORT || exit 1
 
-CMD ["node index.js"]
+# Define command to start the app
+CMD ["node", "index.js"]
